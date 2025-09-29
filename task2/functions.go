@@ -1,4 +1,4 @@
-package task1
+package task2
 
 import (
 	"bufio"
@@ -140,7 +140,7 @@ func ReadApplicantsFromFile(filename string) ([]Applicant, error) {
 	return applicants, nil
 }
 
-func readExactlyOneLine(r io.Reader) (string, error) {
+func readExactlyOneLine(r io.Reader) (string, bool, error) {
 	buffer := make([]byte, 1)
 	result := ""
 	readBytes, err := r.Read(buffer)
@@ -149,98 +149,92 @@ func readExactlyOneLine(r io.Reader) (string, error) {
 		readBytes, err = r.Read(buffer)
 	}
 
-	if err != nil && err != io.EOF {
-		return "", err
+	if err != nil {
+		if err == io.EOF {
+			return result, true, nil
+		}
+		return "", false, err
 	}
 
-	return result, nil
+	return result, false, nil
 }
 
-func RemoveApplicantFromFile(filename string, applicantIndex uint) error {
+func skipLine(r io.Reader, lineDesc string, empty bool, allowNonEmpty bool, failOnEof bool) (error, bool) {
+	line, eof, err := readExactlyOneLine(r)
+	if eof && failOnEof {
+		return fmt.Errorf("unexpected eof while reading %s", lineDesc), false
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read file (%s): %w", lineDesc, err), false
+	}
+	if (line != "" && empty) || (line == "" && !empty && !allowNonEmpty) {
+		return fmt.Errorf("invalid file structure (when reading %s)", lineDesc), false
+	}
+
+	return nil, eof
+}
+
+func getApplicantStartEndPos(file *os.File, applicantIndex int) (int64, int64, error) {
+	if applicantIndex < 0 {
+		return 0, 0, fmt.Errorf("applicant index must be greater or equal to 0, got %d", applicantIndex)
+	}
+
+	var startPos, endPos int64
+
+	for applicantIndex >= 0 {
+		startPos = endPos
+
+		if err, eof := skipLine(file, "first name", false, true, false); err != nil || eof {
+			if eof {
+				return 0, 0, fmt.Errorf("applicant with this number does not exist")
+			}
+			return 0, 0, err
+		}
+
+		if err, _ := skipLine(file, "last name", false, false, true); err != nil {
+			return 0, 0, err
+		}
+
+		if err, _ := skipLine(file, "middle name", false, false, true); err != nil {
+			return 0, 0, err
+		}
+
+		if err, _ := skipLine(file, "year of birth", false, false, true); err != nil {
+			return 0, 0, err
+		}
+
+		if err, _ := skipLine(file, "exam scores", false, false, true); err != nil {
+			return 0, 0, err
+		}
+
+		if err, _ := skipLine(file, "average grade", false, false, true); err != nil {
+			return 0, 0, err
+		}
+
+		if err, _ := skipLine(file, "empty line", true, false, true); err != nil {
+			return 0, 0, err
+		}
+
+		var err error
+		endPos, err = file.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed to get current position: %w", err)
+		}
+
+		applicantIndex--
+	}
+
+	return startPos, endPos, nil
+}
+
+func RemoveApplicantFromFile(filename string, applicantIndex int) error {
 	file, err := os.OpenFile(filename, os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
-	var startPos, endPos int64
-
-	startPos, err = file.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return fmt.Errorf("failed to get current position: %w", err)
-	}
-
-	line, err := readExactlyOneLine(file)
-
-	for line != "" {
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (last name): %w", err)
-		}
-		if line == "" {
-			return fmt.Errorf("invalid file structure")
-		}
-
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (middle name): %w", err)
-		}
-		if line == "" {
-			return fmt.Errorf("invalid file structure")
-		}
-
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (year of birth): %w", err)
-		}
-		if line == "" {
-			return fmt.Errorf("invalid file structure")
-		}
-
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (exam scores): %w", err)
-		}
-		if line == "" {
-			return fmt.Errorf("invalid file structure")
-		}
-
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (average grade): %w", err)
-		}
-		if line == "" {
-			return fmt.Errorf("invalid file structure")
-		}
-
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (empty line): %w", err)
-		}
-		if line != "" {
-			return fmt.Errorf("invalid file structure: expected empty line")
-		}
-
-		endPos, err = file.Seek(0, io.SeekCurrent)
-		if err != nil {
-			return fmt.Errorf("failed to get current position: %w", err)
-		}
-
-		if applicantIndex == 0 {
-			break
-		}
-
-		applicantIndex--
-		startPos = endPos
-
-		line, err = readExactlyOneLine(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file (first name): %w", err)
-		}
-		if line == "" {
-			return fmt.Errorf("invalid file structure")
-		}
-	}
+	startPos, endPos, err := getApplicantStartEndPos(file, applicantIndex)
 
 	structLen := endPos - startPos
 	buffer := make([]byte, structLen)
@@ -290,7 +284,38 @@ func RemoveApplicantFromFile(filename string, applicantIndex uint) error {
 }
 
 func AddApplicantToFile(filename string, applicantIndex int) error {
-	//
+	file, err := os.OpenFile(filename, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	startPos, endPos, err := getApplicantStartEndPos(file, applicantIndex)
+
+	structLen := endPos - startPos
+	buffer := make([]byte, structLen)
+
+	_, err = file.Seek(startPos, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("failed to set read position: %w", err)
+	}
+	readBytes, err := file.Read(buffer)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read file: %w", err)
+	}
+	if int64(readBytes) != structLen {
+		return fmt.Errorf("expected to read %d bytes, actualle read %d", structLen, readBytes)
+	}
+
+	_, err = file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("failed to set write position: %w", err)
+	}
+
+	_, err = file.Write(buffer)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
 
 	return nil
 }
